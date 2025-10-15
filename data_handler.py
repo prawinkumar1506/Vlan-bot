@@ -305,10 +305,232 @@ def plot_comparison(df, metric="Input Rate (bps)"):
     return buf
 
 
+def load_holiday_data(file_path="holiday.csv"):
+    """
+    Load and process holiday data from CSV file.
+
+    Args:
+        file_path (str): Path to the holiday CSV file
+
+    Returns:
+        pd.DataFrame: Processed holiday data with proper date format
+
+    Raises:
+        FileNotFoundError: If the CSV file doesn't exist
+        ValueError: If the CSV format is invalid
+    """
+    try:
+        # Load the CSV data
+        df = pd.read_csv(file_path)
+
+        # Validate required columns
+        required_cols = ['Date', 'Day', 'Holiday']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            raise ValueError(f"Missing required columns: {missing_cols}")
+
+        # Convert date to datetime format
+        df['Date'] = pd.to_datetime(df['Date'], format='%d.%m.%Y', errors='coerce')
+
+        # Remove rows with invalid dates
+        df = df.dropna(subset=['Date'])
+
+        # Clean holiday names - standardize capitalization and remove duplicates
+        df['Holiday'] = df['Holiday'].str.strip().str.title()
+        df['Holiday'] = df['Holiday'].str.replace('Ayudha Puja', 'AYUDHA PUJA')  # Standardize duplicate holiday name
+
+        # Remove duplicate holidays (keeping the first occurrence)
+        df = df.drop_duplicates(subset=['Holiday'], keep='first')
+
+        # Sort by date
+        df = df.sort_values('Date').reset_index(drop=True)
+
+        return df
+
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Holiday CSV file not found at path: {file_path}")
+    except Exception as e:
+        raise ValueError(f"Error loading holiday data: {str(e)}")
+
+def get_holiday_summary(holiday_df):
+    """
+    Generate summary statistics for holiday data.
+
+    Args:
+        holiday_df (pd.DataFrame): Holiday data
+
+    Returns:
+        dict: Summary statistics about holidays
+    """
+    summary = {
+        'total_holidays': len(holiday_df),
+        'earliest_holiday': holiday_df['Date'].min().strftime('%d %b %Y'),
+        'latest_holiday': holiday_df['Date'].max().strftime('%d %b %Y'),
+        'holidays_by_month': {},
+        'holidays_by_day': {}
+    }
+
+    # Group by month
+    holiday_df['Month'] = holiday_df['Date'].dt.month_name()
+    summary['holidays_by_month'] = holiday_df['Month'].value_counts().to_dict()
+
+    # Group by day of week
+    holiday_df['DayOfWeek'] = holiday_df['Date'].dt.day_name()
+    summary['holidays_by_day'] = holiday_df['DayOfWeek'].value_counts().to_dict()
+
+    # List of all holidays
+    summary['holiday_list'] = holiday_df[['Date', 'Holiday']].sort_values('Date').to_dict('records')
+
+    return summary
+
+def get_upcoming_holidays(holiday_df, reference_date=None):
+    """
+    Get upcoming holidays relative to a reference date.
+
+    Args:
+        holiday_df (pd.DataFrame): Holiday data
+        reference_date (str/datetime, optional): Reference date. If None, uses current date.
+
+    Returns:
+        pd.DataFrame: Upcoming holidays sorted by date
+    """
+    if reference_date is None:
+        reference_date = datetime.now()
+    elif isinstance(reference_date, str):
+        reference_date = datetime.strptime(reference_date, '%d.%m.%Y')
+
+    # Filter holidays after reference date
+    upcoming = holiday_df[holiday_df['Date'] >= reference_date]
+
+    return upcoming.sort_values('Date').reset_index(drop=True)
+
+def get_holidays_in_range(holiday_df, start_date, end_date):
+    """
+    Get holidays within a specific date range.
+
+    Args:
+        holiday_df (pd.DataFrame): Holiday data
+        start_date (str/datetime): Start date
+        end_date (str/datetime): End date
+
+    Returns:
+        pd.DataFrame: Holidays within the date range
+    """
+    if isinstance(start_date, str):
+        start_date = datetime.strptime(start_date, '%d.%m.%Y')
+    if isinstance(end_date, str):
+        end_date = datetime.strptime(end_date, '%d.%m.%Y')
+
+    # Filter holidays within date range
+    in_range = holiday_df[(holiday_df['Date'] >= start_date) & (holiday_df['Date'] <= end_date)]
+
+    return in_range.sort_values('Date').reset_index(drop=True)
+
+def load_exam_data(file_path="Exam.csv"):
+    """
+    Load and process exam data from CSV file.
+
+    Args:
+        file_path (str): Path to the exam CSV file
+
+    Returns:
+        pd.DataFrame: Processed exam data with proper date and time format
+
+    Raises:
+        FileNotFoundError: If the CSV file doesn't exist
+        ValueError: If the CSV format is invalid
+    """
+    try:
+        # Load the CSV data
+        df = pd.read_csv(file_path)
+
+        # Validate required columns
+        required_cols = ['Date', 'start time', 'end time', 'Exam']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            raise ValueError(f"Missing required columns: {missing_cols}")
+
+        # Convert date to datetime format
+        df['Date'] = pd.to_datetime(df['Date'], format='%d-%m-%Y', errors='coerce')
+
+        # Convert time columns to datetime.time objects
+        df['Start Time'] = pd.to_datetime(df['start time'], format='%H:%M:%S', errors='coerce').dt.time
+        df['End Time'] = pd.to_datetime(df['end time'], format='%H:%M:%S', errors='coerce').dt.time
+
+        # Remove rows with invalid dates or times
+        df = df.dropna(subset=['Date', 'Start Time', 'End Time'])
+
+        # Clean exam names
+        df['Exam'] = df['Exam'].str.strip().str.upper()
+
+        # Sort by date and start time
+        df = df.sort_values(['Date', 'Start Time']).reset_index(drop=True)
+
+        return df
+
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Exam CSV file not found at path: {file_path}")
+    except Exception as e:
+        raise ValueError(f"Error loading exam data: {str(e)}")
+
+def get_exam_summary(exam_df):
+    """
+    Generate summary statistics for exam data.
+
+    Args:
+        exam_df (pd.DataFrame): Exam data
+
+    Returns:
+        dict: Summary statistics about exams
+    """
+    summary = {
+        'total_exams': len(exam_df),
+        'earliest_exam': exam_df['Date'].min().strftime('%d %b %Y'),
+        'latest_exam': exam_df['Date'].max().strftime('%d %b %Y'),
+        'exams_by_type': {},
+        'exams_by_month': {}
+    }
+
+    # Group by exam type
+    summary['exams_by_type'] = exam_df['Exam'].value_counts().to_dict()
+
+    # Group by month
+    exam_df['Month'] = exam_df['Date'].dt.month_name()
+    summary['exams_by_month'] = exam_df['Month'].value_counts().to_dict()
+
+    # List of all exams
+    summary['exam_list'] = exam_df[['Date', 'Start Time', 'End Time', 'Exam']].sort_values('Date').to_dict('records')
+
+    return summary
+
+def get_upcoming_exams(exam_df, reference_date=None):
+    """
+    Get upcoming exams relative to a reference date.
+
+    Args:
+        exam_df (pd.DataFrame): Exam data
+        reference_date (str/datetime, optional): Reference date. If None, uses current date.
+
+    Returns:
+        pd.DataFrame: Upcoming exams sorted by date and time
+    """
+    if reference_date is None:
+        reference_date = datetime.now()
+    elif isinstance(reference_date, str):
+        reference_date = datetime.strptime(reference_date, '%d-%m-%Y')
+
+    # Convert reference date to datetime
+    reference_date = pd.to_datetime(reference_date)
+
+    # Convert 'Date' column to date and filter exams after reference date
+    upcoming = exam_df[exam_df['Date'].dt.date >= reference_date.date()]
+
+    return upcoming.sort_values(['Date', 'Start Time']).reset_index(drop=True)
+
 def export_summary_report(df, output_file="telemetry_report.txt"):
     """
     Export a comprehensive text report of telemetry analysis.
-    
+
     Args:
         df (pd.DataFrame): Telemetry data
         output_file (str): Output file path
@@ -318,9 +540,9 @@ def export_summary_report(df, output_file="telemetry_report.txt"):
         f.write("TELEMETRY DATA ANALYSIS REPORT\n")
         f.write("=" * 70 + "\n\n")
         f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        
+
         summary = get_data_summary(df)
-        
+
         f.write("OVERVIEW\n")
         f.write("-" * 70 + "\n")
         f.write(f"Total Records: {summary['total_records']}\n")
@@ -330,7 +552,7 @@ def export_summary_report(df, output_file="telemetry_report.txt"):
         f.write(f"Average Output Rate: {summary['avg_output_rate']:,.0f} bps\n")
         f.write(f"Peak Input Rate: {summary['max_input_rate']:,.0f} bps\n")
         f.write(f"Peak Output Rate: {summary['max_output_rate']:,.0f} bps\n\n")
-        
+
         f.write("PER-VLAN STATISTICS\n")
         f.write("-" * 70 + "\n")
         for vlan, stats in summary['vlan_stats'].items():
@@ -341,9 +563,9 @@ def export_summary_report(df, output_file="telemetry_report.txt"):
             f.write(f"  Max Output Rate: {stats['max_output_rate']:,.0f} bps\n")
             f.write(f"  Total Packets In: {stats['total_packets_in']:,}\n")
             f.write(f"  Total Packets Out: {stats['total_packets_out']:,}\n")
-        
+
         f.write("\n" + "=" * 70 + "\n")
         f.write("END OF REPORT\n")
         f.write("=" * 70 + "\n")
-    
+
     print(f"Report exported to: {output_file}")

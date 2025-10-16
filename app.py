@@ -1,6 +1,8 @@
+from difflib import get_close_matches
+import re
 import streamlit as st
 import pandas as pd
-from data_handler import load_data, plot_metric, get_data_summary, get_anomalies, load_holiday_data, get_holiday_summary, get_upcoming_holidays, load_exam_data, get_exam_summary, get_upcoming_exams
+from data_handler import load_data, plot_metric, get_data_summary, get_anomalies, load_holiday_data, get_holiday_summary, get_upcoming_holidays, load_exam_data, get_exam_summary, get_upcoming_exams, plot_box
 import google.generativeai as genai
 from PIL import Image
 import ast
@@ -264,7 +266,7 @@ col1, col2 = st.columns([1.2, 2], gap="large")
 
 with col1:
     st.subheader("💬 AI Assistant")
-    
+
     # Initialize chat history
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
@@ -286,14 +288,14 @@ We have **{holiday_summary['total_holidays']} holidays** and **{exam_summary['to
 Try asking: *"Which VLAN has the highest output rate?"* or *"Show me the traffic trends"* or *"What holidays are coming up?"* or *"What exams are scheduled?"*"""
         }
         st.session_state.chat_history.append(welcome_msg)
-    
+
     # Display chat history
     chat_container = st.container(height=500)
     with chat_container:
         for msg in st.session_state.chat_history:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
-    
+
     # Suggested questions
     st.markdown("**💡 Suggested Questions:**")
     col_q1, col_q2, col_q3, col_q4 = st.columns(4)
@@ -309,25 +311,72 @@ Try asking: *"Which VLAN has the highest output rate?"* or *"Show me the traffic
     with col_q4:
         if st.button("📚 Exams", use_container_width=True):
             st.session_state.suggested_query = "What exams are scheduled?"
-    
+
     # Chat input
     user_input = st.chat_input("Ask about your telemetry data...")
-    
+
     # Handle suggested queries
     if "suggested_query" in st.session_state:
         user_input = st.session_state.suggested_query
         del st.session_state.suggested_query
-    
+
     if user_input:
         # Add user message
         st.session_state.chat_history.append({"role": "user", "content": user_input})
-        
+
         # Show processing indicator
         with st.spinner("🤔 Analyzing data..."):
             # Get available VLANs and metrics
             available_vlans = df['VLAN'].unique().tolist()
             available_metrics = list(df.columns)[2:]
-            
+
+            from difflib import get_close_matches
+
+            # --- Define metrics with synonyms / meaningful keys ---
+            metric_map = {
+                "Input Rate (bps)": [
+                    "input rate", "incoming rate", "in rate", "bps in", "data in"
+                ],
+                "Output Rate (bps)": [
+                    "output rate", "outgoing rate", "out rate", "bps out", "data out"
+                ],
+                "Input Packets": [
+                    "input packet", "incoming packet", "packets in", "in packets"
+                ],
+                "Ouput Packets": [
+                    "output packet", "outgoing packet", "packets out", "out packets"
+                ],
+                "Event vs Input Rate (bps)": [
+                    "exam input", "event input", "input rate by event", "input vs event"
+                ],
+                "Event vs Output Rate (bps)": [
+                    "exam output", "event output", "output rate by event", "output vs event"
+                ]
+            }
+
+            # --- Flatten keywords for fuzzy matching ---
+            keywords = []
+            reverse_map = {}  # map keyword -> actual metric
+            for metric, syns in metric_map.items():
+                for syn in syns:
+                    keywords.append(syn)
+                    reverse_map[syn] = metric
+
+            # --- Get user input ---
+            user_text = user_input.lower()
+
+            # --- Fuzzy match ---
+            closest = get_close_matches(user_text, keywords, n=1, cutoff=0.4)
+
+            if closest:
+                metric = reverse_map[closest[0]]
+            else:
+                metric = "Input Rate (bps)"  # default
+
+            st.session_state["last_metric"] = metric
+            st.session_state["last_vlan"] = None
+
+
             # Enhanced prompt for Gemini
             prompt = f"""
 You are an expert network telemetry analyst with deep knowledge of network performance metrics, holiday information, and exam schedules.
@@ -378,10 +427,10 @@ IMPORTANT:
 - If the question is about holidays, provide holiday information instead of telemetry data
 - If the question is about exams, provide exam information instead of telemetry data
 """
-            
+
             try:
                 response = model.generate_content(prompt)
-                
+
                 # Parse response
                 try:
                     # Try to extract JSON from markdown code blocks
@@ -390,16 +439,16 @@ IMPORTANT:
                         response_text = response_text.split("```")[1]
                         if response_text.startswith("python") or response_text.startswith("json"):
                             response_text = "\n".join(response_text.split("\n")[1:])
-                    
+
                     result = ast.literal_eval(response_text.strip())
-                    
+
                     # Validate the response
                     if not isinstance(result, dict):
                         raise ValueError("Response is not a dictionary")
-                    
+
                     if "answer" not in result:
                         result["answer"] = response.text
-                    
+
                 except Exception as parse_error:
                     st.warning(f"⚠️ Response parsing issue: {str(parse_error)}")
                     result = {
@@ -407,20 +456,14 @@ IMPORTANT:
                         "metric": "Input Rate (bps)",
                         "vlan": None
                     }
-                
-                # Add assistant response
+
                 st.session_state.chat_history.append({
                     "role": "assistant",
                     "content": result["answer"]
                 })
-                
-                # Store visualization parameters
-                st.session_state["last_metric"] = result.get("metric")
-                st.session_state["last_vlan"] = result.get("vlan")
-                
-                # Rerun to update chat display
+
                 st.rerun()
-                
+
             except Exception as e:
                 error_msg = f"❌ Error generating response: {str(e)}"
                 st.error(error_msg)
@@ -431,18 +474,19 @@ IMPORTANT:
 
 with col2:
     st.subheader("📈 Interactive Visualization")
-    
+
     if "last_metric" in st.session_state and st.session_state["last_metric"]:
         metric = st.session_state["last_metric"]
-        vlan = st.session_state.get("last_vlan")
-        
+        vlan = st.session_state["last_vlan"]
+
         # Visualization controls
         col_ctrl1, col_ctrl2 = st.columns(2)
         with col_ctrl1:
+            matrices = ["Input Rate (bps)","Output Rate (bps)","Input Packets","Ouput Packets","Event vs Input Rate (bps)","Event vs Output Rate (bps)"]
             override_metric = st.selectbox(
                 "Select Metric",
-                list(df.columns)[2:],
-                index=list(df.columns)[2:].index(metric) if metric in list(df.columns)[2:] else 0,
+                matrices,
+                index=matrices.index(metric) if metric in matrices else 0,
                 key="metric_select"
             )
         with col_ctrl2:
@@ -450,29 +494,35 @@ with col2:
             current_vlan_idx = 0
             if vlan and vlan in vlan_options:
                 current_vlan_idx = vlan_options.index(vlan)
-            
+
             override_vlan = st.selectbox(
                 "Select VLAN",
                 vlan_options,
                 index=current_vlan_idx,
                 key="vlan_select"
             )
-        
+
         # Update if user changed selection
-        final_metric = override_metric
-        final_vlan = None if override_vlan == "All VLANs" else override_vlan
-        
+        st.session_state["last_metric"] = override_metric
+        st.session_state["last_vlan"] = None if override_vlan == "All VLANs" else override_vlan
+
         # Generate and display plot
         try:
             with st.spinner("📊 Generating visualization..."):
-                buf = plot_metric(df, vlan=final_vlan, metric=final_metric)
+                final_metric = st.session_state["last_metric"]
+                final_vlan = st.session_state["last_vlan"]
+                if("Event" not in final_metric):
+                    buf = plot_metric(df, vlan=final_vlan, metric=final_metric)
+                else:
+                    buf = plot_box(df, vlan=final_vlan,metric=final_metric)
+
                 image = Image.open(buf)
                 st.image(
                     image,
                     caption=f"{final_metric} over time ({'All VLANs' if not final_vlan else final_vlan})",
                     use_container_width=True
                 )
-                
+
                 # Download button for plot
                 buf.seek(0)
                 st.download_button(
@@ -495,6 +545,8 @@ with col2:
         - "What holidays are coming up?"
         - "What exams are scheduled?"
         """)
+
+
 
 # --- FOOTER ---
 st.divider()
